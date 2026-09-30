@@ -1,0 +1,72 @@
+# configs/config.yaml
+project:
+  name: "rsna-pneumonia-yolo-pipeline"
+  seed: 42
+
+paths:
+  # Пути относительно корня проекта
+  raw_dir: "data/raw"
+  staged_dir: "data/staged"
+  processed_dir: "data/processed"
+  models_dir: "models"
+  runs_dir: "runs"
+  # Для Colab: сохраняем важные артефакты на Google Drive
+  # drive_models_dir: "/content/drive/MyDrive/rsna-pneumonia/models"
+  # drive_runs_dir: "/content/drive/MyDrive/rsna-pneumonia/runs"
+
+dataset:
+  kaggle_dataset: "poeticmage/rsna-pneumonia-detection-challenge-train-val"
+  image_size: 640
+  val_split: 0.15
+  test_split: 0.05
+
+preprocessing:
+  # Параметры конвертации DICOM → JPEG
+  jpeg_quality: 95
+  # Нормализация (для DICOM используется windowing)
+  apply_windowing: true
+  filtering:
+    enabled: true
+    # Боксы, у которых площадь < min_box_area_frac от площади изображения — дропаем
+    min_box_area_frac: 0.001        # 0.1% площади
+    # Aspect ratio (w/h) вне [min, max] — дропаем
+    min_aspect_ratio: 0.1           # 1:10
+    max_aspect_ratio: 10.0          # 10:1
+    # Что делать с боксами за границей изображения:
+    #   false — дропать (безопаснее)
+    #   true  — клипить к границам (можно потерять часть объекта)
+    allow_out_of_bounds: false
+    # Если у изображения были боксы, но после фильтрации не осталось ни одного —
+    # удалять изображение целиком (true) или оставить как negative (false)
+    drop_images_with_all_boxes_rejected: true
+    # Сохранять ли дропнутые боксы для аудита
+    save_rejected: true
+
+training:
+  model: "yolov8s.pt"           # Можно заменить на yolov8n, yolov8m и т.д.
+  epochs: 50
+  batch_size: 16
+  imgsz: 640
+  patience: 10
+  workers: 4
+  device: 0                     # 0 = GPU, "cpu" = CPU
+  optimizer: "AdamW"
+  lr0: 0.001
+  lrf: 0.01
+  weight_decay: 0.0005
+  # Аугментации
+  augment:
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 10.0
+    translate: 0.1
+    scale: 0.5
+    flipud: 0.0
+    fliplr: 0.5
+    mosaic: 1.0
+
+evaluation:
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  save_confusion_matrix: true

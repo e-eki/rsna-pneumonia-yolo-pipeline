@@ -1,0 +1,40 @@
+# --- Скачивание ---
+!python src/download_data.py --config configs/config.yaml
+
+# ===== ЭТАП 1: RAW =====
+!python src/analyze_annotations.py --stage raw
+!python src/sample_and_draw.py --stage raw --num 30 --grid
+# смотрим data/reports/raw/*.png + data/samples/raw/contact_sheet.jpg
+
+# --- Предобработка + фильтрация ---
+!python src/preprocess.py --config configs/config.yaml
+# в логе — сводка: сколько отвергнуто, сколько изображений перемещено
+
+# ===== ЭТАП 2: STAGED =====
+!python src/analyze_annotations.py --stage staged
+!python src/sample_and_draw.py --stage staged --num 50 --grid
+# смотрим data/reports/staged/*.png — тут должно быть ЧИСТО
+# out_of_bounds должно быть 0
+
+# --- Смотрим, что именно отвергли ---
+!python src/collect_rejected.py
+# теперь data/samples/rejected/ содержит проблемные снимки с красными боксами
+# смотреть: python src/viewer.py --dir data/samples/rejected
+
+# --- Разделение и YOLO ---
+!python src/split_data.py --config configs/config.yaml
+
+# ===== ЭТАП 3: PROCESSED =====
+!python src/analyze_annotations.py --stage processed --split train
+!python src/analyze_annotations.py --stage processed --split val
+!python src/sample_and_draw.py --stage processed --split train --num 50 --grid
+!python src/sample_and_draw.py --stage processed --split val   --num 50 --grid
+
+# ===== ГЛАВНАЯ проверка: RAW vs PROCESSED =====
+!python src/compare_stages.py --num 40 --mode overlay --split train
+!python src/compare_stages.py --num 40 --mode side    --split val
+# красный = raw, зелёный = processed → должны совпасть
+
+# --- Обучение ---
+!python src/train.py --config configs/config.yaml
+!python src/evaluate.py --config configs/config.yaml

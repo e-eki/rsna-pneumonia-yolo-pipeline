@@ -1,0 +1,34 @@
+# Данные
+data/raw/
+data/staged/
+data/processed/
+
+# ???
+data/reports/
+data/samples/
+data/reports/
+
+# Модели и логи
+models/
+runs/
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Окружение
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Colab
+/content/drive/
