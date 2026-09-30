@@ -16,6 +16,7 @@ paths:
 
 dataset:
   kaggle_dataset: "poeticmage/rsna-pneumonia-detection-challenge-train-val"
+  raw_yolo_subdir: "rsna_yolo"
   image_size: 640
   val_split: 0.15
   test_split: 0.05
