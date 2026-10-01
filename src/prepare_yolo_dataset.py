@@ -1,11 +1,11 @@
-# src/prepare_yolo_dataset.py
 """
 Подготовка датасета, УЖЕ размеченного в формате YOLO.
 
-Вход:  data/raw/rsna_yolo/{images,labels}/{train,val}/*.{png,jpg,txt}
+Вход:  data/raw/<raw_subdir>/images/{train,val}/*.{png,jpg}
+       data/raw/<raw_subdir>/labels/{train,val}/*.txt
 Выход: data/processed/{images,labels}/{train,val}/  + data.yaml
-       data/staged/rejected_annotations.csv         (для collect_rejected.py)
-       data/staged/rejected_images/                 (перемещённые картинки)
+       data/samples/rejected/rejected_annotations.csv
+       data/samples/rejected/rejected_images/
        data/staged/filtering_report.json
 
 Что делает:
@@ -14,12 +14,14 @@
   3. Фильтрует «плохие» боксы:
        - w <= 0 или h <= 0
        - координаты вне [0, 1]
-       - box выходит за границы изображения (xc ± w/2 не в [0,1])
+       - box выходит за границы изображения (с учётом допуска)
        - площадь < min_box_area_frac
        - aspect ratio вне [min, max]
-  4. Изображения, где все боксы отвергнуты, перемещает в staged/rejected_images/
-     (остаются в processed как negative, если drop=false).
-  5. Пишет data.yaml.
+  4. Изображения с критичными или полностью отвергнутыми боксами
+     складывает в data/samples/rejected/rejected_images/.
+  5. Сохраняет изображения в data/processed/ в формате,
+     заданном preprocessing.output_format ("original" | "jpg" | "png").
+  6. Пишет data.yaml.
 
 Пример:
   python -m src.prepare_yolo_dataset --config configs/config.yaml
@@ -47,6 +49,42 @@ def find_images(images_dir: Path):
                    if p.suffix.lower() in IMG_EXTS])
 
 
+def save_image(src: Path, dst_dir: Path, output_format: str,
+               jpeg_quality: int = 92) -> Path:
+    """
+    Сохраняет изображение в dst_dir в нужном формате.
+
+    output_format:
+      "original" — копировать как есть, сохраняя расширение источника;
+      "jpg"      — конвертировать в JPEG;
+      "png"      — конвертировать в PNG.
+
+    Возвращает путь к сохранённому файлу.
+    """
+    fmt = (output_format or "original").lower()
+
+    if fmt == "original":
+        dst = dst_dir / src.name
+        shutil.copy2(src, dst)
+        return dst
+
+    if fmt == "jpg":
+        dst = dst_dir / f"{src.stem}.jpg"
+        with Image.open(src) as im:
+            im.convert("RGB").save(dst, "JPEG",
+                                   quality=jpeg_quality, optimize=True)
+        return dst
+
+    if fmt == "png":
+        dst = dst_dir / f"{src.stem}.png"
+        with Image.open(src) as im:
+            im.save(dst, "PNG", optimize=True)
+        return dst
+
+    raise ValueError(f"Неизвестный output_format: {output_format!r} "
+                     f"(ожидается 'original' | 'jpg' | 'png')")
+
+
 def read_yolo_label(label_path: Path):
     """Читает YOLO-разметку. Возвращает список dict {cls, xc, yc, w, h, raw}."""
     boxes = []
@@ -71,19 +109,36 @@ def read_yolo_label(label_path: Path):
     return boxes
 
 
+def clip_yolo_box(b):
+    """
+    Подрезает YOLO-бокс к [0, 1] так, чтобы он остался внутри кадра.
+    Возвращает (xc, yc, w, h) либо None, если после клипа бокс «схлопнулся».
+    """
+    xc, yc, w, h = b["xc"], b["yc"], b["w"], b["h"]
+
+    x1 = max(0.0, xc - w / 2)
+    y1 = max(0.0, yc - h / 2)
+    x2 = min(1.0, xc + w / 2)
+    y2 = min(1.0, yc + h / 2)
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    new_w = x2 - x1
+    new_h = y2 - y1
+    new_xc = x1 + new_w / 2
+    new_yc = y1 + new_h / 2
+    return new_xc, new_yc, new_w, new_h
+
+
 def box_reject_reasons(b, min_area, min_aspect, max_aspect,
                        img_W, img_H, oob_tolerance=0.0):
     """
     Возвращает список причин отклонения бокса (пустой — значит бокс хороший).
 
-    Параметр `oob_tolerance`:
-      - 0.0   — строгая проверка границ: боксы, упирающиеся в край кадра,
-                отвергаются как extends_out_of_bounds;
-      - > 0   — боксы в пределах tolerance считаются «касающимися края»
-                и подрезаются к [0, 1] вместо отклонения.
-
-    Побочный эффект: при tolerance > 0 бокс `b` может быть подрезан
-    (мутирует dict).
+    oob_tolerance:
+      - 0.0 — строгая проверка границ: боксы у края кадра отклоняются;
+      - > 0 — боксы в пределах tolerance подрезаются к [0, 1] вместо отклонения.
     """
     reasons = []
 
@@ -99,7 +154,6 @@ def box_reject_reasons(b, min_area, min_aspect, max_aspect,
     if xc < 0 or xc > 1 or yc < 0 or yc > 1:
         reasons.append("center_out_of_bounds")
 
-    # ── Проверка границ с допуском (по умолчанию 0.0 = строго) ──
     left   = xc - w / 2
     right  = xc + w / 2
     top    = yc - h / 2
@@ -109,7 +163,6 @@ def box_reject_reasons(b, min_area, min_aspect, max_aspect,
     if left < -eps or right > 1 + eps or top < -eps or bottom > 1 + eps:
         reasons.append("extends_out_of_bounds")
     elif eps > 0 and (left < 0 or right > 1 or top < 0 or bottom > 1):
-        # В пределах допуска, но чуть вылезает — подрезаем.
         clipped = clip_yolo_box(b)
         if clipped is None:
             reasons.append("clipped_to_zero")
@@ -149,15 +202,11 @@ def prepare_split(raw_root: Path, processed_root: Path,
     """
     Обрабатывает один split.
 
-    Ожидаемая структура источника:
+    Структура источника:
         raw_root/images/<split>/*.png
         raw_root/labels/<split>/*.txt
-
-    Логика удаления изображений в samples/rejected/rejected_images/:
-      - если ВСЕ боксы отвергнуты (drop_images_with_all_boxes_rejected);
-      - если ЛЮБОЙ отвергнутый бокс имеет критичную причину
-        (drop_images_with_critical_rejected_boxes).
     """
+    # ── Фильтрация ──
     fconf = config["preprocessing"]["filtering"]
     min_area = fconf["min_box_area_frac"]
     min_aspect = fconf["min_aspect_ratio"]
@@ -171,6 +220,11 @@ def prepare_split(raw_root: Path, processed_root: Path,
         "center_out_of_bounds", "size_over_1",
     ]))
 
+    # ── Формат вывода изображений ──
+    pconf = config["preprocessing"]
+    output_format = pconf.get("output_format", "original")
+    jpeg_quality = pconf.get("jpeg_quality", 92)
+
     images_dir = raw_root / "images" / split_name
     labels_dir = raw_root / "labels" / split_name
 
@@ -178,7 +232,8 @@ def prepare_split(raw_root: Path, processed_root: Path,
         raise FileNotFoundError(f"Нет {images_dir} или {labels_dir}")
 
     images = find_images(images_dir)
-    logger.info(f"[{split_name}] Изображений: {len(images)}")
+    logger.info(f"[{split_name}] Изображений: {len(images)} "
+                f"(output_format={output_format})")
 
     out_images = processed_root / "images" / split_name
     out_labels = processed_root / "labels" / split_name
@@ -275,7 +330,7 @@ def prepare_split(raw_root: Path, processed_root: Path,
                 kept_boxes.append(b)
                 stats["boxes_kept"] += 1
 
-        # ── Определяем судьбу изображения ──
+        # ── Судьба изображения ──
         all_rejected = len(boxes) > 0 and len(kept_boxes) == 0
         should_drop = (
             (drop_all_rejected and all_rejected)
@@ -289,6 +344,7 @@ def prepare_split(raw_root: Path, processed_root: Path,
             if any_critical_rejected:
                 stats["images_critical_rejected"] += 1
 
+            # Отвергнутые сохраняем в ОРИГИНАЛЬНОМ формате (для аудита)
             shutil.copy2(img_path, rejected_images_dir / img_path.name)
             logger.warning(
                 f"[{split_name}] {stem}: "
@@ -296,7 +352,13 @@ def prepare_split(raw_root: Path, processed_root: Path,
                 f"→ rejected_images/"
             )
         else:
-            shutil.copy2(img_path, out_images / img_path.name)
+            # ── Сохранение через save_image (jpg/png/original) ──
+            try:
+                save_image(img_path, out_images, output_format, jpeg_quality)
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить {img_path.name}: {e}")
+                continue
+
             write_yolo_label(out_labels / f"{stem}.txt", kept_boxes)
 
             if len(boxes) == 0:
@@ -355,9 +417,14 @@ def main():
     if not raw_root.exists():
         raise FileNotFoundError(f"Нет папки {raw_root}")
 
-    logger.info(f"Источник: {raw_root}")
-    logger.info(f"Назначение processed: {processed_root}")
-    logger.info(f"Назначение rejected:  {samples_rejected_dir}")
+    output_format = config["preprocessing"].get("output_format", "original")
+    jpeg_quality = config["preprocessing"].get("jpeg_quality", 92)
+
+    logger.info(f"Источник:              {raw_root}")
+    logger.info(f"Назначение processed:  {processed_root}")
+    logger.info(f"Назначение rejected:   {samples_rejected_dir}")
+    logger.info(f"Формат вывода:         {output_format} "
+                f"(jpeg_quality={jpeg_quality})")
 
     all_stats = []
     all_rejected = []
@@ -385,11 +452,13 @@ def main():
     else:
         logger.info("Отвергнутых боксов нет — rejected_annotations.csv не создаётся")
 
-    # filtering_report.json остаётся в staged/
+    # filtering_report.json → staged/
     report = {
         "source": str(raw_root),
         "destination_processed": str(processed_root),
         "destination_rejected": str(samples_rejected_dir),
+        "output_format": output_format,
+        "jpeg_quality": jpeg_quality,
         "splits": all_stats,
     }
     report_path = staged_root / "filtering_report.json"

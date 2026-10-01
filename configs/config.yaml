@@ -23,8 +23,12 @@ dataset:
   test_split: 0.05
 
 preprocessing:
-  # Параметры конвертации DICOM → JPEG
-  jpeg_quality: 95
+  # Формат изображений на выходе в data/processed/
+  #   "original" — копировать как есть (по умолчанию)
+  #   "jpg"      — конвертировать в JPEG (быстрее I/O, меньше размер, quality=92)
+  #   "png"      — конвертировать в PNG (без потерь, но медленнее и больше)
+  output_format: "jpg"    # "original" | "jpg" | "png"
+  jpeg_quality: 92        # применяется и в preprocess.py, и в prepare_yolo_dataset.py
   # Нормализация (для DICOM используется windowing)
   apply_windowing: true
   filtering:
