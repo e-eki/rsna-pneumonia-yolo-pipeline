@@ -1,21 +1,22 @@
-# src/collect_rejected.py
 """
-Собирает отвергнутые на этапе препроцессинга изображения в отдельную папку
-и рисует на них отвергнутые боксы (или полигоны, если бы они были в аннотациях).
+Собирает отвергнутые на этапе подготовки датасета изображения и рисует
+на них отвергнутые боксы.
 
-Результат можно смотреть через src/viewer.py.
+Входные данные:
+  data/samples/rejected/rejected_annotations.csv  — отвергнутые боксы
+  data/samples/rejected/rejected_images/*.png     — полностью отвергнутые
+                                                    изображения
+  data/processed/images/{train,val}/*.png         — если картинка осталась
+                                                    в processed, но часть
+                                                    боксов у неё отвергнута
+  data/raw/rsna_yolo/images/{train,val}/*.png     — fallback
 
-Входные файлы (создаются preprocess.py):
-  data/staged/rejected_annotations.csv   — отвергнутые боксы
-  data/staged/rejected_images/           — полностью отвергнутые изображения
-                                            (перемещаются сюда из staged/images/)
+Выход:
+  data/samples/rejected/drawn/*.jpg               — отрисованные копии
+  data/samples/rejected/metadata.json
 
-Для частично отвергнутых изображений (когда часть боксов прошла, часть — нет)
-картинка берётся из staged/images/.
-
-Примеры:
-  python src/collect_rejected.py
-  python src/collect_rejected.py --output data/samples/rejected
+Пример:
+  python -m src.collect_rejected
 """
 import argparse
 import json
@@ -30,11 +31,10 @@ from src.utils import load_config, setup_logging, get_logger
 logger = get_logger(__name__)
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
-COLOR_BOX = (0, 0, 255)   # красный — отвергнутый бокс
+COLOR_BOX = (0, 0, 255)      # красный — отвергнутый бокс
 COLOR_TEXT = (255, 255, 255)
+COLOR_CRIT = (0, 165, 255)   # оранжевый — критичное отклонение
 
-
-# ------------------------- отрисовка -------------------------
 
 def _draw_rect(img, x1, y1, x2, y2, color, thickness=2):
     H, W = img.shape[:2]
@@ -43,44 +43,25 @@ def _draw_rect(img, x1, y1, x2, y2, color, thickness=2):
     cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
 
-def _draw_polygon(img, points, color, thickness=2):
-    """Если в аннотации есть список точек (полигон) — рисуем его."""
-    pts = np.asarray(points, dtype=np.int32).reshape(-1, 1, 2)
-    cv2.polylines(img, [pts], isClosed=True, color=color, thickness=thickness)
-
-
 def _add_caption(img, text, y=25):
     (tw, th), _ = cv2.getTextSize(text, FONT, 0.55, 1)
     cv2.rectangle(img, (5, y - th - 8), (15 + tw, y + 5), (0, 0, 0), -1)
     cv2.putText(img, text, (10, y), FONT, 0.55, COLOR_TEXT, 1, cv2.LINE_AA)
 
 
-# ------------------------- поиск изображений -------------------------
-
-def _find_image(staged_dir: Path, raw_dir: Path, stem: str):
-    """
-    Ищем изображение в порядке приоритета:
-      1. staged/rejected_images/   — полностью отвергнутые
-      2. staged/images/            — частично отвергнутые (там же, где все)
-      3. raw/                      — исходники (могут быть DICOM)
-    """
-    candidates_roots = [
-        staged_dir / "rejected_images",
-        staged_dir / "images",
-        raw_dir,
-    ]
-    exts = (".jpg", ".jpeg", ".png", ".dcm")
-    for root in candidates_roots:
+def _find_image(stems, paths_list):
+    """Ищет файл по stem в списке корней (в порядке приоритета)."""
+    exts = (".png", ".jpg", ".jpeg", ".dcm")
+    for root in paths_list:
         if not root.exists():
             continue
-        for p in root.rglob(f"{stem}.*"):
-            if p.suffix.lower() in exts:
+        for p in root.iterdir():
+            if p.stem == stems and p.suffix.lower() in exts:
                 return p
     return None
 
 
 def _load_image(path: Path):
-    """Загружает изображение, конвертируя DICOM при необходимости."""
     if path.suffix.lower() == ".dcm":
         try:
             import pydicom
@@ -97,30 +78,30 @@ def _load_image(path: Path):
     return cv2.imread(str(path))
 
 
-# ------------------------- main -------------------------
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--output", default=None,
-                        help="По умолчанию data/samples/rejected/")
     args = parser.parse_args()
 
     setup_logging()
     config = load_config(args.config)
 
-    staged_dir = Path(config["paths"]["staged_dir"])
-    raw_dir = Path(config["paths"]["raw_dir"])
-    out_dir = Path(args.output) if args.output else Path("data/samples/rejected")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    raw_root = Path(config["paths"]["raw_dir"]) / config["dataset"].get(
+        "raw_yolo_subdir", "rsna_yolo")
+    processed_root = Path(config["paths"]["processed_dir"])
+    samples_root = Path(config["paths"].get("samples_dir", "data/samples"))
+    rejected_root = samples_root / "rejected"
 
-    rejected_csv = staged_dir / "rejected_annotations.csv"
+    rejected_csv = rejected_root / "rejected_annotations.csv"
+    rejected_images = rejected_root / "rejected_images"
+    drawn_dir = rejected_root / "drawn"
+    drawn_dir.mkdir(parents=True, exist_ok=True)
+
     if not rejected_csv.exists():
-        logger.warning(f"Нет файла отвергнутых аннотаций: {rejected_csv}")
-        logger.warning("Либо фильтрация ничего не отвергла, либо preprocess.py не запускался.")
-        (out_dir / "README.txt").write_text(
+        logger.warning(f"Нет файла {rejected_csv} — нечего отрисовывать")
+        (rejected_root / "README.txt").write_text(
             "Нет отвергнутых аннотаций.\n"
-            "Запустите сначала `python src/preprocess.py`.\n"
+            "Запустите сначала `python -m src.prepare_yolo_dataset`.\n"
         )
         return
 
@@ -130,15 +111,23 @@ def main():
         logger.info("Файл пуст — нечего отрисовывать.")
         return
 
-    by_patient = df.groupby("patientId")
+    # Список корней для поиска оригинальных изображений
+    search_roots = [
+        rejected_images,                                    # 1. отвергнутые
+        processed_root / "images" / "train",                # 2. в processed
+        processed_root / "images" / "val",
+        raw_root / "images" / "train",                      # 3. fallback raw
+        raw_root / "images" / "val",
+    ]
+
     meta = []
     saved = 0
 
-    for pid, group in by_patient:
+    for pid, group in df.groupby("patientId"):
         pid = str(pid)
-        img_path = _find_image(staged_dir, raw_dir, pid)
+        img_path = _find_image(pid, search_roots)
         if img_path is None:
-            logger.warning(f"Не найдено изображение для {pid} — пропускаем")
+            logger.warning(f"Не найдено изображение для {pid}")
             continue
 
         img = _load_image(img_path)
@@ -147,26 +136,25 @@ def main():
             continue
 
         reasons = []
+        is_critical = False
         for _, row in group.iterrows():
-            # Если в аннотации есть полигон — рисуем его
-            if "polygon" in row.index and isinstance(row.get("polygon"), str):
-                try:
-                    pts = json.loads(row["polygon"])
-                    _draw_polygon(img, pts, COLOR_BOX)
-                except Exception:
-                    pass
-            # Иначе — рисуем bbox (случай RSNA)
-            elif {"x", "y", "width", "height"}.issubset(row.index):
+            # Всё в пикселях — рисуем bbox
+            if {"x", "y", "width", "height"}.issubset(row.index):
                 x, y, w, h = (float(row["x"]), float(row["y"]),
                               float(row["width"]), float(row["height"]))
-                _draw_rect(img, x, y, x + w, y + h, COLOR_BOX)
+                crit = bool(row.get("critical", False))
+                is_critical = is_critical or crit
+                _draw_rect(img, x, y, x + w, y + h,
+                           COLOR_CRIT if crit else COLOR_BOX)
             reasons.append(str(row.get("reject_reason", "?")))
 
         unique_reasons = sorted(set(reasons))
-        caption = f"{pid}  rejected={len(group)}  [{'; '.join(unique_reasons)[:80]}]"
+        tag = "CRITICAL" if is_critical else "minor"
+        caption = f"{pid}  [{tag}]  rejected={len(group)}  " \
+                  f"{'; '.join(unique_reasons)[:80]}"
         _add_caption(img, caption)
 
-        out_path = out_dir / f"{pid}.jpg"
+        out_path = drawn_dir / f"{pid}.jpg"
         cv2.imwrite(str(out_path), img)
         saved += 1
 
@@ -176,14 +164,14 @@ def main():
             "output": str(out_path),
             "rejected_boxes": int(len(group)),
             "reasons": unique_reasons,
+            "critical": is_critical,
         })
 
-    # metadata.json — для совместимости со viewer.py и Colab-слайдером
-    with open(out_dir / "metadata.json", "w") as f:
+    with open(rejected_root / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"Сохранено {saved} отвергнутых изображений в {out_dir}")
-    logger.info(f"Смотреть: python src/viewer.py --dir {out_dir}")
+    logger.info(f"Сохранено {saved} отвергнутых изображений в {drawn_dir}")
+    logger.info(f"Смотреть: python -m src.viewer --dir {drawn_dir}")
 
 
 if __name__ == "__main__":

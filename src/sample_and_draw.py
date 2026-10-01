@@ -219,7 +219,12 @@ def main():
     logger.info(f"Сэмплировано {k} из {len(samples)}")
 
     # ---- выходная директория ----
-    out_dir = Path(args.output) if args.output else Path("data/samples") / args.stage
+    if args.output:
+        out_dir = Path(args.output)
+    elif args.stage == "processed":
+        out_dir = Path("data/samples") / args.stage / args.split
+    else:
+        out_dir = Path("data/samples") / args.stage
     out_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = []

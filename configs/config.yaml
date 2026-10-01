@@ -8,6 +8,7 @@ paths:
   raw_dir: "data/raw"
   staged_dir: "data/staged"
   processed_dir: "data/processed"
+  samples_dir: "data/samples"        # ← НОВОЕ
   models_dir: "models"
   runs_dir: "runs"
   # Для Colab: сохраняем важные артефакты на Google Drive
@@ -37,9 +38,17 @@ preprocessing:
     #   false — дропать (безопаснее)
     #   true  — клипить к границам (можно потерять часть объекта)
     allow_out_of_bounds: false
+    out_of_bounds_tolerance: 0.0   # 0.0 = строго; поставьте 1e-3, чтобы принимать погранбоксы
     # Если у изображения были боксы, но после фильтрации не осталось ни одного —
     # удалять изображение целиком (true) или оставить как negative (false)
     drop_images_with_all_boxes_rejected: true
+    drop_images_with_critical_rejected_boxes: true     # ← НОВОЕ
+    critical_reject_reasons:                           # ← НОВОЕ
+      - extends_out_of_bounds
+      - aspect_too_high
+      - aspect_too_low
+      - center_out_of_bounds
+      - size_over_1
     # Сохранять ли дропнутые боксы для аудита
     save_rejected: true
 
