@@ -87,7 +87,6 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
     val_root = Path(config["paths"]["runs_dir"]).resolve() / "val"
     val_root.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Запуск валидации: conf={map_conf}, iou={map_iou} (для mAP)")
     metrics = model.val(
         data=str(data_yaml),
         conf=map_conf,
