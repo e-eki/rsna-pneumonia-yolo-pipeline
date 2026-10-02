@@ -29,6 +29,11 @@ def train_yolo(config: dict, run_name: str = "train"):
     logger.info(f"Загрузка модели: {model_name}")
     model = YOLO(model_name)
 
+    # ── Корневая папка запусков: runs/train/ ──
+    runs_dir = Path(config["paths"]["runs_dir"]).resolve()
+    project_dir = runs_dir / "train"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
     # Параметры обучения
     train_args = {
         "data": str(data_yaml),
@@ -42,8 +47,7 @@ def train_yolo(config: dict, run_name: str = "train"):
         "lr0": config["training"]["lr0"],
         "lrf": config["training"]["lrf"],
         "weight_decay": config["training"]["weight_decay"],
-        "project": str(Path(config["paths"]["runs_dir"]).resolve()),
-        # ── ИСПРАВЛЕНО: имя запуска приходит извне ──
+        "project": str(project_dir),
         "name": run_name,
         "exist_ok": True,       # True → перезаписать, если папка с таким именем есть
         "pretrained": True,
@@ -75,7 +79,6 @@ def main():
 
     run_name = args.run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
     train_yolo(config, run_name=run_name)
-    # train_yolo(config, run_name=args.run_name)
 
 
 if __name__ == "__main__":

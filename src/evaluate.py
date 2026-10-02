@@ -9,29 +9,43 @@ from src.utils import load_config, ensure_dirs, setup_logging, get_logger
 logger = get_logger(__name__)
 
 
+# def derive_val_run_name(model_path: Path) -> str:
+#     """
+#     Из пути к модели выводит имя папки для val-результатов.
+
+#     Правило:
+#       runs/train_<X>/weights/best.pt      → val_<X>
+#       runs/train_<X>/weights/last.pt      → val_<X>
+#       runs/<X>/weights/best.pt           → val_<X>
+#       что-то/совсем/другое/best.pt        → val_<stem_родителя_родителя>
+
+#     Логика: берём имя папки запуска (та, что лежит в runs/ и содержит
+#     weights/) и, если она начинается с "train", заменяем префикс на "val".
+#     """
+#     # model_path = runs/train_X/weights/best.pt
+#     # weights_dir = runs/train_X/weights
+#     # run_dir = runs/train_X
+#     weights_dir = model_path.parent
+#     run_dir = weights_dir.parent
+#     run_name = run_dir.name
+
+#     if run_name.startswith("train"):
+#         return "val" + run_name[len("train"):]
+#     return f"val_{run_name}"
+
 def derive_val_run_name(model_path: Path) -> str:
     """
     Из пути к модели выводит имя папки для val-результатов.
 
     Правило:
-      runs/train_<X>/weights/best.pt      → val_<X>
-      runs/train_<X>/weights/last.pt      → val_<X>
-      runs/<X>/weights/best.pt           → val_<X>
-      что-то/совсем/другое/best.pt        → val_<stem_родителя_родителя>
-
-    Логика: берём имя папки запуска (та, что лежит в runs/ и содержит
-    weights/) и, если она начинается с "train", заменяем префикс на "val".
+      runs/train/<run_name>/weights/best.pt  →  <run_name>
+      runs/train/<run_name>/weights/last.pt  →  <run_name>
     """
-    # model_path = runs/train_X/weights/best.pt
-    # weights_dir = runs/train_X/weights
-    # run_dir = runs/train_X
-    weights_dir = model_path.parent
-    run_dir = weights_dir.parent
-    run_name = run_dir.name
-
-    if run_name.startswith("train"):
-        return "val" + run_name[len("train"):]
-    return f"val_{run_name}"
+    # model_path = runs/train/<run_name>/weights/best.pt
+    # weights_dir = runs/train/<run_name>/weights
+    # run_dir     = runs/train/<run_name>     ← вот он
+    run_dir = model_path.parent.parent
+    return run_dir.name
 
 
 def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
@@ -45,7 +59,7 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
     # ── Определяем модель ──
     if model_path is None:
         runs_dir = Path(config["paths"]["runs_dir"])
-        best_models = sorted(runs_dir.glob("**/weights/best.pt"))
+        best_models = sorted(runs_dir.glob("train/**/weights/best.pt"))
         if not best_models:
             raise FileNotFoundError("Обученные модели не найдены в runs/")
         model_path = best_models[-1]
@@ -69,13 +83,19 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
     map_iou = config["evaluation"]["map"]["iou"]
     logger.info(f"Запуск валидации: conf={map_conf}, iou={map_iou} (для mAP)")
 
+    # ── Корневая папка val-запусков: runs/val/ ──
+    val_root = Path(config["paths"]["runs_dir"]).resolve() / "val"
+    val_root.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Запуск валидации: conf={map_conf}, iou={map_iou} (для mAP)")
     metrics = model.val(
         data=str(data_yaml),
         conf=map_conf,
         iou=map_iou,
         save_json=True,
         plots=True,
-        project=str(Path(config["paths"]["runs_dir"]).resolve()),
+        # ── ИЗМЕНЕНО: project = runs/val, name = имя запуска ──
+        project=str(val_root),
         name=run_name,
         exist_ok=True,
     )
