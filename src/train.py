@@ -1,22 +1,46 @@
-"""Обучение модели YOLO на датасете RSNA Pneumonia."""
+"""
+Обучение YOLO-модели для детекции пневмонии на датасете RSNA.
+
+Скрипт загружает предобученные веса YOLO, обучает модель на датасете
+из data/processed/ (собранном prepare_yolo_dataset.py) и сохраняет
+логи и веса в runs/train/<run_name>/.
+
+Все гиперпараметры читаются из configs/config.yaml (секция training).
+Имя запуска задаётся через --run-name; если не указано — генерируется
+автоматически по дате.
+
+Примеры запуска:
+    # Smoke test — быстрая проверка, что пайплайн работает
+    python -m src.train --config configs/config.yaml \\
+        --run-name "smoke_yolov8n_3ep"
+
+    # Полное обучение
+    python -m src.train --config configs/config.yaml \\
+        --run-name "2026-10-02_full_yolov8s_30ep_no_mosaic"
+
+    # Без имени — папка создастся с датой и временем
+    python -m src.train --config configs/config.yaml
+"""
 import argparse
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from ultralytics import YOLO
 
-from src.utils import load_config, ensure_dirs, setup_logging, get_logger
+from src.utils import ensure_dirs, get_logger, load_config, setup_logging
 
 logger = get_logger(__name__)
 
 
-def train_yolo(config: dict, run_name: str = "train"):
-    """Обучение YOLO с параметрами из конфига.
+def train_yolo(config: dict, run_name: str):
+    """
+    Обучает YOLO с параметрами из конфига.
 
-    run_name — имя папки в runs/, например:
-      "smoke_yolov8n_3ep",
-      "full_yolov8s_30ep_no_mosaic",
-      "exp_yolov8s_30ep_mosaic_0.3".
+    Args:
+        config:   словарь из configs/config.yaml.
+        run_name: имя папки внутри runs/train/. Используется как есть —
+                  лучше давать осмысленные имена (например,
+                  "2026-10-02_full_yolov8s_30ep_no_mosaic").
     """
     processed_dir = Path(config["paths"]["processed_dir"])
     data_yaml = processed_dir / "data.yaml"
@@ -24,38 +48,37 @@ def train_yolo(config: dict, run_name: str = "train"):
     if not data_yaml.exists():
         raise FileNotFoundError(f"data.yaml не найден: {data_yaml}")
 
-    # Загрузка предобученной модели
-    model_name = config["training"]["model"]
-    logger.info(f"Загрузка модели: {model_name}")
-    model = YOLO(model_name)
+    tconf = config["training"]
 
-    # ── Корневая папка запусков: runs/train/ ──
-    runs_dir = Path(config["paths"]["runs_dir"]).resolve()
-    project_dir = runs_dir / "train"
+    logger.info(f"Загрузка модели: {tconf['model']}")
+    model = YOLO(tconf["model"])
+
+    # Логи и веса складываем в runs/train/<run_name>/.
+    project_dir = Path(config["paths"]["runs_dir"]).resolve() / "train"
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    # Параметры обучения
     train_args = {
-        "data": str(data_yaml),
-        "epochs": config["training"]["epochs"],
-        "batch": config["training"]["batch_size"],
-        "imgsz": config["training"]["imgsz"],
-        "patience": config["training"]["patience"],
-        "workers": config["training"]["workers"],
-        "device": config["training"]["device"],
-        "optimizer": config["training"]["optimizer"],
-        "lr0": config["training"]["lr0"],
-        "lrf": config["training"]["lrf"],
-        "weight_decay": config["training"]["weight_decay"],
-        "project": str(project_dir),
-        "name": run_name,
-        "exist_ok": True,       # True → перезаписать, если папка с таким именем есть
-        "pretrained": True,
-        "verbose": True,
+        "data":         str(data_yaml),
+        "epochs":       tconf["epochs"],
+        "batch":        tconf["batch_size"],
+        "imgsz":        tconf["imgsz"],
+        "patience":     tconf["patience"],
+        "workers":      tconf["workers"],
+        "device":       tconf["device"],
+        "save_period":  tconf.get("save_period", -1),
+        "optimizer":    tconf["optimizer"],
+        "lr0":          tconf["lr0"],
+        "lrf":          tconf["lrf"],
+        "weight_decay": tconf["weight_decay"],
+        "project":      str(project_dir),
+        "name":         run_name,
+        "exist_ok":     True,   # перезаписать папку, если имя уже занято
+        "pretrained":   True,
+        "verbose":      True,
     }
 
-    # Добавление аугментаций
-    train_args.update(config["training"]["augment"])
+    # Гиперпараметры аугментаций (hsv_*, degrees, mosaic, ...) — из конфига.
+    train_args.update(tconf["augment"])
 
     logger.info(f"Начало обучения: {train_args['epochs']} эпох, "
                 f"batch={train_args['batch']}, run_name='{run_name}'")
@@ -69,8 +92,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--run-name", default=None,
-                    help="Имя папки в runs/. Если не задано — генерируется автоматически "
-                         "с датой и временем.")
+                        help="Имя папки в runs/train/. Если не задано — "
+                             "генерируется автоматически с датой и временем.")
     args = parser.parse_args()
 
     setup_logging()

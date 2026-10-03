@@ -1,96 +1,102 @@
-# src/analyze_annotations.py
 """
-Статистика по разметке. Поддерживает три стадии: raw, staged, processed.
+Статистика по разметке: графики и проверки на выход за границы.
 
-Сохраняет графики:
-  - boxes per image
-  - box area (px и % от площади)
-  - aspect ratio
-  - баланс классов
-  - positive / negative
-  - out_of_bounds (пиксели — для raw/staged, [0,1] — для processed)
+Поддерживает три стадии:
+    --stage raw        — CSV + изображения в data/raw (пиксельные координаты);
+    --stage staged     — CSV + изображения в data/staged (пиксельные координаты);
+    --stage processed  — YOLO-датасет в data/processed (нормализованные координаты).
 
-Примеры:
-  python src/analyze_annotations.py --stage raw
-  python src/analyze_annotations.py --stage staged
-  python src/analyze_annotations.py --stage processed --split train
-  python src/analyze_annotations.py --stage processed --split val
+Что сохраняется в data/reports/<stage>[_<split>]/:
+    boxes_per_image.png    — распределение числа боксов на изображение;
+    box_sizes.png          — распределение площади и aspect ratio боксов;
+    class_balance.png      — баланс классов;
+    pixel_out_of_bounds.txt (для raw/staged) — список изображений с OOB-боксами;
+    out_of_bounds.csv      (для processed)   — боксы вне [0, 1];
+    report.json            — сводка в машинно-читаемом виде.
 
-Считает статистику по разметке и сохраняет графики в data/reports/:
-Распределение числа боксов на изображение — сколько объектов обычно на кадре.
-Распределение размеров боксов (в пикселях и в % от площади изображения) — ловит «мусорные» крошечные или гигантские боксы.
-Баланс классов (для RSNA — 1 класс, но скрипт универсальный).
-Баланс positive/negative — сколько изображений без объектов.
-Проверка выхода координат за пределы [0, 1] для YOLO-формата — критично для обучения.
-Распределение aspect ratio боксов.
-
-Работает для двух стадий: staged (CSV, пиксельные координаты) и processed (YOLO-разметка).
+Примеры запуска:
+    python -m src.analyze_annotations --stage raw
+    python -m src.analyze_annotations --stage processed --split train
+    python -m src.analyze_annotations --stage processed --split val
 """
 import argparse
 import json
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")  # headless — важно для Colab/Docker
+matplotlib.use("Agg")  # headless-режим — важно для Colab и Docker
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from PIL import Image
 
-from src.utils import load_config, setup_logging, get_logger
+from src.utils import get_logger, load_config, setup_logging
 
 logger = get_logger(__name__)
 
 CLASS_NAMES = {0: "pneumonia"}
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 
 
-# ------------------------- чтение размеров -------------------------
+# ─────────────────────────── размеры изображений ───────────────────────────
 
 def _image_size(path: Path):
-    """Возвращает (W, H) для jpg/png или DICOM."""
+    """
+    Возвращает (W, H) для jpg/png или DICOM.
+    При ошибке чтения — (None, None).
+    """
     suffix = path.suffix.lower()
-    if suffix in (".jpg", ".jpeg", ".png", ".bmp"):
+
+    if suffix in IMG_EXTS:
         try:
             with Image.open(path) as im:
                 return im.size
         except Exception as e:
             logger.warning(f"Не удалось прочитать {path}: {e}")
             return (None, None)
+
     if suffix == ".dcm":
         try:
             import pydicom
-            ds = pydicom.dcmread(str(path))
-            arr = ds.pixel_array
+            arr = pydicom.dcmread(str(path)).pixel_array
             return int(arr.shape[1]), int(arr.shape[0])
         except Exception as e:
             logger.warning(f"DICOM read failed {path}: {e}")
             return (None, None)
+
     return (None, None)
 
 
 def _collect_size_map(images_dir: Path) -> dict:
+    """Собирает {stem: (W, H)} для всех изображений в директории."""
     size_map = {}
     if not images_dir.exists():
         return size_map
-    exts = (".jpg", ".jpeg", ".png", ".bmp", ".dcm")
+
     for p in images_dir.rglob("*"):
-        if p.suffix.lower() in exts:
+        if p.suffix.lower() in IMG_EXTS or p.suffix.lower() == ".dcm":
             size_map[p.stem] = _image_size(p)
     return size_map
 
 
-# ------------------------- сбор данных -------------------------
+# ─────────────────────────── сбор данных ───────────────────────────
 
 def collect_pixel_annotations(root: Path):
     """
     Читает пиксельные аннотации из raw/ или staged/.
-    Возвращает (df, size_map, all_stems).
+
+    Возвращает (df, size_map, all_stems):
+        df        — DataFrame с колонками x, y, width, height, area_frac, aspect;
+        size_map  — {stem: (W, H)};
+        all_stems — множество имён всех изображений.
     """
     csvs = [c for c in root.rglob("*.csv") if "rejected" not in c.name]
     if not csvs:
         raise FileNotFoundError(f"CSV с аннотациями не найден в {root}")
     if len(csvs) > 1:
-        logger.info(f"Найдено несколько CSV: {[c.name for c in csvs]}. Берём {csvs[0].name}")
+        logger.info(f"Найдено несколько CSV: {[c.name for c in csvs]}. "
+                    f"Берём {csvs[0].name}")
+
     ann_file = csvs[0]
     df = pd.read_csv(ann_file)
     logger.info(f"Загружено {len(df)} строк из {ann_file}")
@@ -104,35 +110,42 @@ def collect_pixel_annotations(root: Path):
     all_stems = set(size_map.keys())
     logger.info(f"Найдено изображений: {len(size_map)}")
 
-    df["img_W"] = df["patientId"].astype(str).map(lambda x: size_map.get(x, (None, None))[0])
-    df["img_H"] = df["patientId"].astype(str).map(lambda x: size_map.get(x, (None, None))[1])
+    # Дополняем df вычисляемыми колонками для графиков.
+    df["img_W"] = df["patientId"].astype(str).map(
+        lambda x: size_map.get(x, (None, None))[0])
+    df["img_H"] = df["patientId"].astype(str).map(
+        lambda x: size_map.get(x, (None, None))[1])
     df["area_px"] = df["width"] * df["height"]
     df["area_frac"] = df["area_px"] / (df["img_W"] * df["img_H"])
     df["aspect"] = df["width"] / df["height"].replace(0, np.nan)
     df["cls"] = 0
     df = df.rename(columns={"patientId": "stem"})
     df["area_norm"] = df["area_frac"]
+
     return df, size_map, all_stems
 
 
 def collect_processed(processed_dir: Path, split: str):
-    """YOLO-боксы + размеры изображений."""
+    """
+    Читает YOLO-разметку из data/processed/<split>/.
+
+    Возвращает (df, sizes, all_stems) в том же формате, что
+    collect_pixel_annotations, но с нормализованными координатами.
+    """
     images_dir = processed_dir / "images" / split
     labels_dir = processed_dir / "labels" / split
 
     if not images_dir.exists():
         raise FileNotFoundError(f"Нет папки {images_dir}")
 
-    rows = []
     sizes = {}
     all_stems = set()
-
     for img_path in images_dir.glob("*"):
-        if img_path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
-            continue
-        all_stems.add(img_path.stem)
-        sizes[img_path.stem] = _image_size(img_path)
+        if img_path.suffix.lower() in IMG_EXTS:
+            all_stems.add(img_path.stem)
+            sizes[img_path.stem] = _image_size(img_path)
 
+    rows = []
     for stem in all_stems:
         label_path = labels_dir / f"{stem}.txt"
         if not label_path.exists():
@@ -154,7 +167,10 @@ def collect_processed(processed_dir: Path, split: str):
 
 
 def check_pixel_out_of_bounds(df, size_map):
-    """Возвращает set(patientId), где бокс выходит за границы или имеет неположительные размеры."""
+    """
+    Возвращает set(stem) изображений, у которых хотя бы один бокс
+    выходит за границы кадра или имеет неположительные размеры.
+    """
     bad = set()
     for _, row in df.iterrows():
         pid = str(row["stem"])
@@ -163,23 +179,28 @@ def check_pixel_out_of_bounds(df, size_map):
         W, H = size_map[pid]
         if W is None or H is None:
             continue
+
         x, y, w, h = row["x"], row["y"], row["width"], row["height"]
         if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > W or y + h > H:
             bad.add(pid)
     return bad
 
 
-# ------------------------- графики -------------------------
+# ─────────────────────────── графики ───────────────────────────
 
 def plot_boxes_per_image(df, sizes, all_stems, out_path, title):
-    key = "stem" if "stem" in df.columns else None
-    counts = df.groupby(key).size() if key and len(df) else pd.Series(dtype=int)
+    """
+    Гистограмма числа боксов на изображение + столбики positive/negative.
+    Возвращает словарь со счётчиками для report.json.
+    """
+    counts = df.groupby("stem").size() if len(df) else pd.Series(dtype=int)
 
     total_images = len(all_stems) if all_stems else len(sizes)
     num_with_boxes = int(counts.shape[0]) if len(counts) else 0
     num_empty = max(0, total_images - num_with_boxes)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
     if len(counts):
         axes[0].hist(counts.values, bins=range(1, int(counts.max()) + 2),
                      edgecolor="black", align="left")
@@ -196,10 +217,12 @@ def plot_boxes_per_image(df, sizes, all_stems, out_path, title):
     axes[1].set_ylabel("Число изображений")
     for i, v in enumerate([num_with_boxes, num_empty]):
         axes[1].text(i, v + 0.5, str(v), ha="center")
+
     plt.suptitle(title)
     plt.tight_layout()
     plt.savefig(out_path, dpi=120)
     plt.close()
+
     return {
         "total_images": total_images,
         "with_boxes": num_with_boxes,
@@ -208,11 +231,17 @@ def plot_boxes_per_image(df, sizes, all_stems, out_path, title):
 
 
 def plot_box_sizes(df, out_path, title):
+    """
+    Гистограммы площади бокса и aspect ratio.
+    Возвращает сводную статистику по площади для report.json.
+    """
     if not len(df):
         return {}
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-    values = df["area_norm"].dropna() if "area_norm" in df.columns else pd.Series(dtype=float)
+    values = df["area_norm"].dropna() if "area_norm" in df.columns \
+        else pd.Series(dtype=float)
     if len(values):
         axes[0].hist(values, bins=40, edgecolor="black")
         axes[0].set_title("Площадь бокса (доля от площади изображения)")
@@ -221,7 +250,7 @@ def plot_box_sizes(df, out_path, title):
 
     if "aspect" in df.columns:
         ar = df["aspect"].dropna()
-        ar = ar[(ar > 0.05) & (ar < 20)]
+        ar = ar[(ar > 0.05) & (ar < 20)]  # отсекаем выбросы для читаемости
         if len(ar):
             axes[1].hist(ar, bins=40, edgecolor="black")
             axes[1].set_title("Aspect ratio (w/h)")
@@ -232,45 +261,55 @@ def plot_box_sizes(df, out_path, title):
     plt.tight_layout()
     plt.savefig(out_path, dpi=120)
     plt.close()
+
     return {
-        "area_mean": float(values.mean()) if len(values) else None,
+        "area_mean":   float(values.mean())   if len(values) else None,
         "area_median": float(values.median()) if len(values) else None,
-        "area_min": float(values.min()) if len(values) else None,
-        "area_max": float(values.max()) if len(values) else None,
+        "area_min":    float(values.min())    if len(values) else None,
+        "area_max":    float(values.max())    if len(values) else None,
     }
 
 
 def plot_class_balance(df, out_path, title):
+    """Столбики по классам. Возвращает {имя_класса: число_боксов}."""
     if not len(df):
         return {}
+
     counts = df["cls"].value_counts().sort_index()
     labels = [CLASS_NAMES.get(int(c), str(c)) for c in counts.index]
+
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.bar(labels, counts.values, color="#1f77b4")
     ax.set_title(title)
     ax.set_ylabel("Число боксов")
     for i, v in enumerate(counts.values):
         ax.text(i, v, str(v), ha="center", va="bottom")
+
     plt.tight_layout()
     plt.savefig(out_path, dpi=120)
     plt.close()
+
     return {CLASS_NAMES.get(int(c), str(c)): int(v) for c, v in counts.items()}
 
 
-# ------------------------- main -------------------------
+# ─────────────────────────── main ───────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--stage", required=True, choices=["raw", "staged", "processed"])
-    parser.add_argument("--split", default="train", choices=["train", "val"])
-    parser.add_argument("--output", default=None)
+    parser.add_argument("--stage", required=True,
+                        choices=["raw", "staged", "processed"])
+    parser.add_argument("--split", default="train", choices=["train", "val"],
+                        help="Только для --stage processed")
+    parser.add_argument("--output", default=None,
+                        help="Куда сохранять. По умолчанию "
+                             "data/reports/<stage>[_<split>]/")
     args = parser.parse_args()
 
     setup_logging()
     config = load_config(args.config)
 
-    # Куда сохранять отчёт
+    # ── Куда сохранять ──
     if args.output:
         out_dir = Path(args.output)
     elif args.stage == "processed":
@@ -279,13 +318,13 @@ def main():
         out_dir = Path("data/reports") / args.stage
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- источник данных ----
+    # ── Источник данных ──
     if args.stage in ("raw", "staged"):
         root = Path(config["paths"]["raw_dir"]) if args.stage == "raw" \
-               else Path(config["paths"]["staged_dir"])
+            else Path(config["paths"]["staged_dir"])
         df, sizes, all_stems = collect_pixel_annotations(root)
         title = f"{args.stage.upper()} (пиксельные координаты)"
-    else:  # processed
+    else:
         processed_dir = Path(config["paths"]["processed_dir"])
         df, sizes, all_stems = collect_processed(processed_dir, args.split)
         if len(df):
@@ -297,25 +336,27 @@ def main():
 
     report = {"stage": args.stage, "split": args.split, "num_boxes": int(len(df))}
 
-    # ---- графики ----
+    # ── Графики ──
     report["boxes_per_image"] = plot_boxes_per_image(
         df, sizes, all_stems, out_dir / "boxes_per_image.png", title)
-    report["box_sizes"] = plot_box_sizes(df, out_dir / "box_sizes.png", title)
-    report["class_balance"] = plot_class_balance(df, out_dir / "class_balance.png", title)
+    report["box_sizes"] = plot_box_sizes(
+        df, out_dir / "box_sizes.png", title)
+    report["class_balance"] = plot_class_balance(
+        df, out_dir / "class_balance.png", title)
 
-    # ---- проверка границ: raw/staged (пиксели) ----
+    # ── Проверка границ: raw/staged (пиксели) ──
     if args.stage in ("raw", "staged") and len(df):
         oob_images = check_pixel_out_of_bounds(df, sizes)
         report["pixel_out_of_bounds_images"] = len(oob_images)
         if oob_images:
-            logger.warning(f"⚠️ {len(oob_images)} изображений с боксами вне границ")
-            with open(out_dir / "pixel_out_of_bounds.txt", "w") as f:
-                f.write("\n".join(sorted(oob_images)))
-            logger.warning(f"Список: {out_dir / 'pixel_out_of_bounds.txt'}")
+            logger.warning(f"⚠ {len(oob_images)} изображений с боксами вне границ")
+            path = out_dir / "pixel_out_of_bounds.txt"
+            path.write_text("\n".join(sorted(oob_images)))
+            logger.warning(f"Список: {path}")
         else:
             logger.info("✅ Все пиксельные боксы внутри границ изображений")
 
-    # ---- проверка границ: processed (YOLO [0,1]) ----
+    # ── Проверка границ: processed (YOLO [0,1]) ──
     if args.stage == "processed" and len(df):
         oob = ((df["xc"] < 0) | (df["xc"] > 1) |
                (df["yc"] < 0) | (df["yc"] > 1) |
@@ -323,16 +364,17 @@ def main():
                (df["h"] <= 0) | (df["h"] > 1))
         report["yolo_out_of_bounds"] = int(oob.sum())
         if oob.sum() > 0:
-            logger.warning(f"⚠️ Найдено {oob.sum()} боксов вне [0,1]!")
-            df[oob].to_csv(out_dir / "out_of_bounds.csv", index=False)
-            logger.warning(f"Сохранены в {out_dir / 'out_of_bounds.csv'}")
+            logger.warning(f"⚠ Найдено {oob.sum()} боксов вне [0, 1]")
+            path = out_dir / "out_of_bounds.csv"
+            df[oob].to_csv(path, index=False)
+            logger.warning(f"Сохранены в {path}")
         else:
             logger.info("✅ Все YOLO-координаты в допустимых диапазонах")
 
-    # ---- отчёт ----
+    # ── Отчёт ──
     with open(out_dir / "report.json", "w") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    logger.info(f"Отчёт: {out_dir / 'report.json'}")
+    logger.info(f"Отчёт:   {out_dir / 'report.json'}")
     logger.info(f"Графики: {out_dir}")
 
 

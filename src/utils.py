@@ -1,30 +1,49 @@
-# src/utils.py
-"""Общие утилиты для пайплайна."""
-import os
+"""
+Общие утилиты для всех скриптов пайплайна.
+
+Содержит единый набор вспомогательных функций:
+  - setup_logging — настройка формата логов;
+  - load_config   — чтение YAML-конфига;
+  - ensure_dirs   — создание директорий из config["paths"];
+  - get_logger    — получение именованного логгера.
+
+Все скрипты пайплайна используют эти функции, чтобы поведение
+логирования и работа с путями были одинаковыми.
+"""
 import logging
-import yaml
 from pathlib import Path
 
+import yaml
+
+
 def setup_logging(level=logging.INFO):
-    """Настройка логирования."""
+    """Настраивает единый формат логов для всего пайплайна."""
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+
 def load_config(config_path="configs/config.yaml"):
-    """Загрузка YAML-конфига."""
+    """Читает YAML-конфиг и возвращает его как словарь."""
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    return config
+        return yaml.safe_load(f)
+
 
 def ensure_dirs(config):
-    """Создание всех необходимых директорий."""
+    """
+    Создаёт все директории, перечисленные в config["paths"].
+
+    Служебные ключи, начинающиеся с "drive_" (пути для Google Drive),
+    пропускаются: они существуют только для документации и копируются
+    вручную, если нужно.
+    """
     for key, path in config["paths"].items():
         if path and not key.startswith("drive_"):
             Path(path).mkdir(parents=True, exist_ok=True)
 
+
 def get_logger(name):
-    """Получение логгера с именем модуля."""
+    """Возвращает логгер с указанным именем (обычно __name__)."""
     return logging.getLogger(name)

@@ -1,55 +1,68 @@
-"""Оценка обученной модели на валидационной выборке."""
+"""
+Оценка обученной YOLO-модели на валидационной выборке.
+
+Скрипт загружает веса (по умолчанию — последняя best.pt в runs/train/),
+прогоняет валидацию на data/processed и сохраняет графики и JSON
+с предсказаниями в runs/val/<run_name>/.
+
+Имя папки для результатов автоматически выводится из пути к модели:
+    runs/train/<run_name>/weights/best.pt  →  runs/val/<run_name>/
+
+Метрики mAP считаются со стандартными для COCO порогами (conf=0.001,
+iou=0.6) — так результаты совпадают с последней эпохой обучения.
+Пороги инференса (conf=0.25, iou=0.45) лежат отдельно и используются
+в predict.py / демо.
+
+Примеры запуска:
+    # Последняя обученная модель
+    python -m src.evaluate --config configs/config.yaml
+
+    # Конкретная модель
+    python -m src.evaluate --config configs/config.yaml \\
+        --model runs/train/2026-10-02_full_yolov8s/weights/best.pt
+
+    # Переопределить имя папки результатов
+    python -m src.evaluate --config configs/config.yaml \\
+        --model runs/train/smoke/weights/best.pt \\
+        --run-name smoke_custom
+"""
 import argparse
 from pathlib import Path
 
 from ultralytics import YOLO
 
-from src.utils import load_config, ensure_dirs, setup_logging, get_logger
+from src.utils import ensure_dirs, get_logger, load_config, setup_logging
 
 logger = get_logger(__name__)
 
-
-# def derive_val_run_name(model_path: Path) -> str:
-#     """
-#     Из пути к модели выводит имя папки для val-результатов.
-
-#     Правило:
-#       runs/train_<X>/weights/best.pt      → val_<X>
-#       runs/train_<X>/weights/last.pt      → val_<X>
-#       runs/<X>/weights/best.pt           → val_<X>
-#       что-то/совсем/другое/best.pt        → val_<stem_родителя_родителя>
-
-#     Логика: берём имя папки запуска (та, что лежит в runs/ и содержит
-#     weights/) и, если она начинается с "train", заменяем префикс на "val".
-#     """
-#     # model_path = runs/train_X/weights/best.pt
-#     # weights_dir = runs/train_X/weights
-#     # run_dir = runs/train_X
-#     weights_dir = model_path.parent
-#     run_dir = weights_dir.parent
-#     run_name = run_dir.name
-
-#     if run_name.startswith("train"):
-#         return "val" + run_name[len("train"):]
-#     return f"val_{run_name}"
 
 def derive_val_run_name(model_path: Path) -> str:
     """
     Из пути к модели выводит имя папки для val-результатов.
 
     Правило:
-      runs/train/<run_name>/weights/best.pt  →  <run_name>
-      runs/train/<run_name>/weights/last.pt  →  <run_name>
+        runs/train/<run_name>/weights/best.pt  →  <run_name>
+        runs/train/<run_name>/weights/last.pt  →  <run_name>
+
+    Логика: model_path → weights/ → <run_name>/ → берём имя папки.
     """
-    # model_path = runs/train/<run_name>/weights/best.pt
-    # weights_dir = runs/train/<run_name>/weights
-    # run_dir     = runs/train/<run_name>     ← вот он
-    run_dir = model_path.parent.parent
-    return run_dir.name
+    return model_path.parent.parent.name
 
 
 def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
-    """Оценка модели на val-выборке."""
+    """
+    Оценивает модель на валидационной выборке.
+
+    Args:
+        config:     словарь из configs/config.yaml.
+        model_path: путь к весам. Если None — берётся последняя best.pt
+                    в runs/train/.
+        run_name:   имя папки в runs/val/. Если None — выводится из
+                    пути к модели (см. derive_val_run_name).
+
+    Returns:
+        объект метрик от Ultralytics (metrics.box.map50 и т.д.).
+    """
     processed_dir = Path(config["paths"]["processed_dir"])
     data_yaml = processed_dir / "data.yaml"
 
@@ -61,7 +74,7 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
         runs_dir = Path(config["paths"]["runs_dir"])
         best_models = sorted(runs_dir.glob("train/**/weights/best.pt"))
         if not best_models:
-            raise FileNotFoundError("Обученные модели не найдены в runs/")
+            raise FileNotFoundError("Обученные модели не найдены в runs/train/")
         model_path = best_models[-1]
         logger.info(f"Модель не указана — берём последнюю: {model_path}")
     else:
@@ -70,7 +83,7 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
     if not model_path.exists():
         raise FileNotFoundError(f"Модель не найдена: {model_path}")
 
-    # ── Определяем имя папки для результатов ──
+    # ── Имя папки результатов: как у train, если не задано явно ──
     if run_name is None:
         run_name = derive_val_run_name(model_path)
         logger.info(f"Имя для результатов выведено из пути модели: {run_name}")
@@ -81,25 +94,23 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
 
     map_conf = config["evaluation"]["map"]["conf"]
     map_iou = config["evaluation"]["map"]["iou"]
-    logger.info(f"Запуск валидации: conf={map_conf}, iou={map_iou} (для mAP)")
 
-    # ── Корневая папка val-запусков: runs/val/ ──
     val_root = Path(config["paths"]["runs_dir"]).resolve() / "val"
     val_root.mkdir(parents=True, exist_ok=True)
 
+    logger.info(f"Запуск валидации: conf={map_conf}, iou={map_iou} (для mAP)")
     metrics = model.val(
         data=str(data_yaml),
         conf=map_conf,
         iou=map_iou,
         save_json=True,
         plots=True,
-        # ── ИЗМЕНЕНО: project = runs/val, name = имя запуска ──
         project=str(val_root),
         name=run_name,
         exist_ok=True,
     )
 
-    # ── Метрики ──
+    # ── Итоговые метрики ──
     logger.info("=" * 50)
     logger.info("МЕТРИКИ НА ВАЛИДАЦИИ")
     logger.info("=" * 50)
@@ -117,11 +128,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--model", default=None,
-                        help="Путь к весам. По умолчанию — последняя best.pt в runs/")
+                        help="Путь к весам. По умолчанию — последняя "
+                             "best.pt в runs/train/.")
     parser.add_argument("--run-name", default=None,
-                        help="Имя папки для val-результатов. "
-                             "По умолчанию выводится из пути модели: "
-                             "runs/train_X/weights/best.pt → val_X")
+                        help="Имя папки в runs/val/. По умолчанию берётся "
+                             "имя train-папки: runs/train/X/... → runs/val/X/")
     args = parser.parse_args()
 
     setup_logging()
