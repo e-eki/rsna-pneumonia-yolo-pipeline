@@ -1,0 +1,77 @@
+# Правильный workflow для Colab
+# Схема 1 (рекомендую): правите локально, в Colab только запускаете
+# text
+# ┌──────────────┐    push     ┌──────────┐    pull    ┌──────────────┐
+# │ Локальный ПК │ ──────────► │  GitHub  │ ─────────► │    Colab     │
+# │  (VS Code)   │             │development│           │  (runtime)   │
+# └──────────────┘             └──────────┘            └──────────────┘
+# В Colab:
+
+# python
+# # Первый раз в сессии — клонируем
+# !git clone -b development https://github.com/e-eki/rsna-pneumonia-yolo-pipeline.git
+# %cd rsna-pneumonia-yolo-pipeline
+
+# # Скачиваем датасет, готовим processed/... — всё это живёт в /content/
+
+# # Позже, когда правите код локально и пушите — в Colab НЕ клонируем заново:
+# !git pull origin development
+# # data/, models/, runs/ остаются на месте
+# Датасет не теряется, потому что вы не трогаете папку — просто подтягиваете изменения в src/.
+
+
+# Вариант A. Правлю локально (правильный путь для портфолио):
+# Затем в Colab (не переклонируя!):
+# %cd /content/rsna-pneumonia-yolo-pipeline
+# !git pull origin development
+
+
+
+# Вариант B. Правлю прямо в Colab:
+# Откройте файл в Colab-редакторе (двойной клик по src/prepare_yolo_dataset.py в файловом дереве слева), внесите правки, сохраните (Ctrl+S), потом:
+
+# python
+# !git add src/prepare_yolo_dataset.py
+# !git commit -m "Fix YOLO OOB tolerance and boxes_kept counter"
+# !git push origin development
+
+
+
+
+
+# Схема 2: правите прямо в Colab
+# Если удобнее править в Colab (у вас же тут живая среда с данными), то коммитить из Colab в GitHub:
+
+# python
+# # Один раз в сессии
+# !git config --global user.email "your@email.com"
+# !git config --global user.name "e-eki"
+
+# # Токен GitHub храните в Colab Secrets (🔑) под именем GITHUB_TOKEN
+# import os
+# from google.colab import userdata
+# os.environ["GITHUB_TOKEN"] = userdata.get("GITHUB_TOKEN")
+
+# !git remote set-url origin https://oauth2:$GITHUB_TOKEN@github.com/e-eki/rsna-pneumonia-yolo-pipeline.git
+# Потом после правок:
+
+# python
+# !git add src/prepare_yolo_dataset.py
+# !git commit -m "Fix prepare_split paths and boxes_kept counter"
+# !git push origin development
+# Токен для GitHub: Settings → Developer settings → Personal access tokens → Tokens (classic) → права repo. Положите его в Colab Secrets как GITHUB_TOKEN.
+
+
+# Дополнительная защита: хранить данные на Drive
+# Даже с правильным workflow сессия Colab рано или поздно отвалится, и /content/ обнулится. Чтобы не перекачивать 3.5 ГБ датасета каждый раз:
+
+# python
+# # После первого скачивания и подготовки — сохраняем на Drive
+# import shutil
+# shutil.copytree("data", "/content/drive/MyDrive/rsna-pneumonia/data", dirs_exist_ok=True)
+# Потом в новой сессии:
+
+# python
+# # Восстанавливаем data из Drive — мгновенно
+# shutil.copytree("/content/drive/MyDrive/rsna-pneumonia/data", "data", dirs_exist_ok=True)
+# Это называется checkpointing данных — стандартная практика при работе в ephemeral-средах. Полностью снимает вопрос «а если я переклонирую — потеряю?». Теряете только при удалении с Drive.

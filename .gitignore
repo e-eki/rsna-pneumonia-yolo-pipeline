@@ -21,7 +21,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
-notebooks/test
 
 # ─── Окружение ────────────────────────────────────────────
 .env
