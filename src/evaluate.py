@@ -1,11 +1,11 @@
 """
 Оценка обученной YOLO-модели на валидационной выборке.
 
-Скрипт загружает веса (по умолчанию — последняя best.pt в runs/train/),
-прогоняет валидацию на data/processed и сохраняет графики и JSON
-с предсказаниями в runs/val/<run_name>/.
+Скрипт загружает указанные веса (--model обязателен), прогоняет
+валидацию на data/processed и сохраняет графики и JSON с предсказаниями
+в runs/val/<run_name>/.
 
-Имя папки для результатов автоматически выводится из пути к модели:
+Имя папки для результатов по умолчанию выводится из пути к модели:
     runs/train/<run_name>/weights/best.pt  →  runs/val/<run_name>/
 
 Метрики mAP считаются со стандартными для COCO порогами (conf=0.001,
@@ -14,16 +14,13 @@ iou=0.6) — так результаты совпадают с последне�
 в predict.py / демо.
 
 Примеры запуска:
-    # Последняя обученная модель
-    python -m src.evaluate --config configs/config.yaml
-
-    # Конкретная модель
-    python -m src.evaluate --config configs/config.yaml \\
-        --model runs/train/2026-10-02_full_yolov8s/weights/best.pt
+    # Явно указать веса
+    python -m src.evaluate --config configs/config.yaml \
+        --model runs/train/baseline_yolov8s_30ep/weights/best.pt
 
     # Переопределить имя папки результатов
-    python -m src.evaluate --config configs/config.yaml \\
-        --model runs/train/smoke/weights/best.pt \\
+    python -m src.evaluate --config configs/config.yaml \
+        --model runs/train/smoke/weights/best.pt \
         --run-name smoke_custom
 """
 import argparse
@@ -49,14 +46,13 @@ def derive_val_run_name(model_path: Path) -> str:
     return model_path.parent.parent.name
 
 
-def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
+def evaluate_model(config: dict, model_path: str, run_name: str = None):
     """
     Оценивает модель на валидационной выборке.
 
     Args:
         config:     словарь из configs/config.yaml.
-        model_path: путь к весам. Если None — берётся последняя best.pt
-                    в runs/train/.
+        model_path: путь к весам (обязателен).
         run_name:   имя папки в runs/val/. Если None — выводится из
                     пути к модели (см. derive_val_run_name).
 
@@ -69,17 +65,8 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
     if not data_yaml.exists():
         raise FileNotFoundError(f"data.yaml не найден: {data_yaml}")
 
-    # ── Определяем модель ──
-    if model_path is None:
-        runs_dir = Path(config["paths"]["runs_dir"])
-        best_models = sorted(runs_dir.glob("train/**/weights/best.pt"))
-        if not best_models:
-            raise FileNotFoundError("Обученные модели не найдены в runs/train/")
-        model_path = best_models[-1]
-        logger.info(f"Модель не указана — берём последнюю: {model_path}")
-    else:
-        model_path = Path(model_path)
-
+    # ── Модель ──
+    model_path = Path(model_path)
     if not model_path.exists():
         raise FileNotFoundError(f"Модель не найдена: {model_path}")
 
@@ -127,9 +114,9 @@ def evaluate_model(config: dict, model_path: str = None, run_name: str = None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--model", default=None,
-                        help="Путь к весам. По умолчанию — последняя "
-                             "best.pt в runs/train/.")
+    parser.add_argument("--model", required=True,
+                        help="Путь к весам для оценки. "
+                             "Например: runs/train/<run_name>/weights/best.pt")
     parser.add_argument("--run-name", default=None,
                         help="Имя папки в runs/val/. По умолчанию берётся "
                              "имя train-папки: runs/train/X/... → runs/val/X/")
