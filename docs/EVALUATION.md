@@ -56,6 +56,7 @@ infer:
 
 ## 📁 Что сохраняется при оценке
 
+```text
 runs/val/<run_name>/
 ├── predictions.json           # предсказания в COCO-формате
 ├── confusion_matrix.png       # матрица ошибок
@@ -65,6 +66,7 @@ runs/val/<run_name>/
 ├── P_curve.png, R_curve.png
 ├── val_batch0_pred.jpg, ...   # предсказания на картинках
 └── val_batch0_labels.jpg, ... # ground truth на тех же картинках
+```
 
 Файлы val_batch*_pred.jpg vs val_batch*_labels.jpg — самый удобный способ визуально сравнить, что модель предсказала и что было размечено.
 
