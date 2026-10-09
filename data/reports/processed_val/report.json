@@ -1,0 +1,20 @@
+{
+  "stage": "processed",
+  "split": "val",
+  "num_boxes": 2844,
+  "boxes_per_image": {
+    "total_images": 8005,
+    "with_boxes": 1803,
+    "without_boxes": 6202
+  },
+  "box_sizes": {
+    "area_mean": 0.07501951683799965,
+    "area_median": 0.0630755659485,
+    "area_min": 0.0022125107419999996,
+    "area_max": 0.285325901245
+  },
+  "class_balance": {
+    "pneumonia": 2844
+  },
+  "yolo_out_of_bounds": 0
+}

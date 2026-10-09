@@ -1,0 +1,3 @@
+patientId,split,x,y,width,height,x_norm,y_norm,w_norm,h_norm,reject_reason,critical
+8da6abd4-8940-4696-bc43-6f0891cb7493,train,592.0,560.000512,320.0,464.0,0.734375,0.773438,0.3125,0.453125,extends_out_of_bounds,True
+847f25e9-6983-4c5f-a1e6-f3629557f1a3,val,75.00031999999999,816.000512,307.999744,208.0,0.223633,0.898438,0.300781,0.203125,extends_out_of_bounds,True
