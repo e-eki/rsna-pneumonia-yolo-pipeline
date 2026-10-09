@@ -1,0 +1,118 @@
+# ============================================================
+# Конфигурация пайплайна RSNA Pneumonia YOLO
+# ============================================================
+# Все пути — относительно корня проекта.
+# Значения с пометкой "для Colab" закомментированы: их можно
+# раскомментировать, чтобы сохранять артефакты на Google Drive.
+
+project:
+  name: "rsna-pneumonia-yolo-pipeline"
+  seed: 42
+
+# ─── Пути ───────────────────────────────────────────────────
+paths:
+  raw_dir:       "data/raw"        # исходные данные с Kaggle
+  staged_dir:    "data/staged"     # отчёты фильтрации
+  processed_dir: "data/processed"  # финальный YOLO-датасет
+  samples_dir:   "data/samples"    # визуальные проверки
+  models_dir:    "models"          # экспортированные веса
+  runs_dir:      "runs"            # логи обучения и оценки
+  # drive_models_dir: "/content/drive/MyDrive/rsna-pneumonia/models"
+  # drive_runs_dir:   "/content/drive/MyDrive/rsna-pneumonia/runs"
+
+# ─── Датасет ────────────────────────────────────────────────
+dataset:
+  kaggle_dataset:  "poeticmage/rsna-pneumonia-detection-challenge-train-val"
+  raw_yolo_subdir: "rsna_yolo"     # подпапка в data/raw с YOLO-датасетом
+
+# ─── Предобработка ──────────────────────────────────────────
+preprocessing:
+  # Формат изображений на выходе в data/processed/:
+  #   "original" — копировать как есть;
+  #   "jpg"      — конвертировать в JPEG (быстрее I/O, меньше размер);
+  #   "png"      — конвертировать в PNG (без потерь, но тяжелее).
+  output_format: "jpg"
+  jpeg_quality:  92  # используется только при output_format="jpg"
+
+  # ─── Фильтрация разметки ───
+  # Отсеиваем боксы, которые портят обучение: микроскопические,
+  # слишком вытянутые или выходящие за границы кадра.
+  filtering:
+    enabled: true
+
+    # Площадь бокса как доля от площади изображения.
+    min_box_area_frac: 0.001        # 0.1% — боксы меньше дропаются
+
+    # Соотношение сторон (w/h). Значения вне диапазона дропаются.
+    min_aspect_ratio: 0.1           # 1:10
+    max_aspect_ratio: 10.0          # 10:1
+
+    # Боксы на границе кадра. В медицинских датасетах они часто
+    # являются валидной разметкой (очаг у края снимка), поэтому:
+    #   out_of_bounds_tolerance: 0.0   — строгая проверка, такие боксы дропаются;
+    #   out_of_bounds_tolerance: 1e-3  — допускаем и подрезаем к [0, 1].
+    out_of_bounds_tolerance: 0.0
+
+    # Что делать с изображением, у которого:
+    #   drop_images_with_all_boxes_rejected:      все боксы отвергнуты;
+    #   drop_images_with_critical_rejected_boxes: хотя бы один бокс отвергнут
+    #                                             по критичной причине.
+    # В обоих случаях true = переместить изображение в samples/rejected/,
+    # чтобы модель не училась «здесь нет очага» на снимке, где он размечен.
+    drop_images_with_all_boxes_rejected:      true
+    drop_images_with_critical_rejected_boxes: true
+
+    # Причины, считающиеся критичными (см. prepare_yolo_dataset.py).
+    critical_reject_reasons:
+      - extends_out_of_bounds
+      - aspect_too_high
+      - aspect_too_low
+      - center_out_of_bounds
+      - size_over_1
+
+# ─── Обучение ───────────────────────────────────────────────
+training:
+  model:  "yolov8s.pt"    # yolov8n / yolov8s / yolov8m / yolov8l
+  epochs: 30
+  batch_size: 16
+  imgsz:  640             # стандарт для YOLOv8
+  patience: 10            # early stopping: стоп, если mAP не растёт 10 эпох
+  workers:  4
+  device:   0             # 0 = первый GPU, "cpu" = CPU
+  save_period: 5          # сохранять промежуточный чекпоинт каждые 5 эпох
+
+  optimizer:    "AdamW"
+  lr0:          0.001     # начальный learning rate
+  lrf:          0.01      # финальный LR = lr0 * lrf
+  weight_decay: 0.0005
+
+  # ─── Аугментации ───
+  # Значения соответствуют дефолтам YOLOv8, кроме mosaic и flipud.
+  augment:
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees:   10.0
+    translate: 0.1
+    scale:     0.5
+    flipud:    0.0        # вертикальное отражение ломает анатомию — выключено
+    fliplr:    0.5        # горизонтальное отражение безопасно
+    mosaic:    0.0        # склейка 4 снимков разрушает структуру рентгена — выключено
+
+# ─── Оценка ─────────────────────────────────────────────────
+evaluation:
+  # Пороги для подсчёта mAP (использует evaluate.py).
+  # Для mAP нельзя брать пороги инференса: модель должна отдать
+  # ВСЕ предсказания, чтобы построить полную precision-recall кривую.
+  # Значения совпадают с дефолтами YOLO при обучении — так метрики
+  # evaluate.py совпадают с последней эпохой train.
+  map:
+    conf: 0.001
+    iou:  0.6
+
+  # Пороги для инференса (predict.py, демо, показ врачу).
+  #   conf — минимальная уверенность для показа предсказания;
+  #   iou  — порог NMS: пересекающиеся боксы с IoU > iou схлопываются в один.
+  infer:
+    conf: 0.25
+    iou:  0.45

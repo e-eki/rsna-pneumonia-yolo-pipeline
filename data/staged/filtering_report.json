@@ -1,0 +1,43 @@
+{
+  "source": "data/raw/rsna_yolo",
+  "destination_processed": "data/processed",
+  "destination_rejected": "data/samples/rejected",
+  "output_format": "jpg",
+  "jpeg_quality": 92,
+  "splits": [
+    {
+      "split": "train",
+      "images_total": 18678,
+      "images_positive": 4207,
+      "images_negative": 14470,
+      "images_all_boxes_rejected": 0,
+      "images_critical_rejected": 1,
+      "images_dropped_to_rejected": 1,
+      "images_missing_label": 0,
+      "boxes_total": 6709,
+      "boxes_kept": 6708,
+      "boxes_rejected": 1,
+      "boxes_clipped": 0,
+      "rejected_by_reason": {
+        "extends_out_of_bounds": 1
+      }
+    },
+    {
+      "split": "val",
+      "images_total": 8006,
+      "images_positive": 1803,
+      "images_negative": 6202,
+      "images_all_boxes_rejected": 0,
+      "images_critical_rejected": 1,
+      "images_dropped_to_rejected": 1,
+      "images_missing_label": 0,
+      "boxes_total": 2846,
+      "boxes_kept": 2845,
+      "boxes_rejected": 1,
+      "boxes_clipped": 0,
+      "rejected_by_reason": {
+        "extends_out_of_bounds": 1
+      }
+    }
+  ]
+}
