@@ -12,11 +12,11 @@
 Примеры запуска:
     # Smoke test — быстрая проверка, что пайплайн работает
     python -m src.train --config configs/config.yaml \\
-        --run-name "smoke_yolov8n_3ep"
+        --run-name "smoke_test_yolov8n_3ep"
 
     # Полное обучение
     python -m src.train --config configs/config.yaml \\
-        --run-name "2026-10-02_full_yolov8s_30ep_no_mosaic"
+        --run-name "2026-10-02_yolov8s_30ep_no_mosaic"
 
     # Без имени — папка создастся с датой и временем
     python -m src.train --config configs/config.yaml
@@ -40,7 +40,7 @@ def train_yolo(config: dict, run_name: str):
         config:   словарь из configs/config.yaml.
         run_name: имя папки внутри runs/train/. Используется как есть —
                   лучше давать осмысленные имена (например,
-                  "2026-10-02_full_yolov8s_30ep_no_mosaic").
+                  "2026-10-02_yolov8s_30ep_no_mosaic").
     """
     processed_dir = Path(config["paths"]["processed_dir"])
     data_yaml = processed_dir / "data.yaml"

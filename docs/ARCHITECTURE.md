@@ -62,9 +62,9 @@ YOLO получает `project` как `Path(...).resolve()`, а не относ
 Для каждого обучения создаётся `runs/train/<run_name>/`, для оценки — `runs/val/<run_name>/` с **тем же именем**. Имя val-папки автоматически выводится из пути к весам:
 
 ```text
-runs/train/2026-10-02_full_yolov8s_30ep/weights/best.pt
+runs/train/2026-10-02_yolov8s_30ep/weights/best.pt
               ↓
-runs/val/2026-10-02_full_yolov8s_30ep/
+runs/val/2026-10-02_yolov8s_30ep/
 ```
 
 Это даёт сортировку по алфавиту, при которой пары «обучение ↔ оценка» всегда лежат рядом — легко сравнивать.

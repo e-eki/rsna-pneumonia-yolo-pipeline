@@ -20,8 +20,8 @@ iou=0.6) — так результаты совпадают с последне�
 
     # Переопределить имя папки результатов
     python -m src.evaluate --config configs/config.yaml \
-        --model runs/train/smoke/weights/best.pt \
-        --run-name smoke_custom
+        --model runs/train/smoke_test/weights/best.pt \
+        --run-name smoke_test_custom
 """
 import argparse
 from pathlib import Path

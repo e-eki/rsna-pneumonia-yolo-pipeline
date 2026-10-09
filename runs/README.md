@@ -21,9 +21,6 @@ runs/
 ├── confusion_matrix.png
 └── val_batch_pred.jpg
 
-
-**Правило:** для каждого `runs/train/<run_name>/` создаётся парная `runs/val/<run_name>/` с тем же именем.
-
 ---
 
 ## Эксперименты

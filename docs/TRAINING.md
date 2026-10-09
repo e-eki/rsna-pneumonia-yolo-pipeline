@@ -6,7 +6,7 @@
 
 ```bash
 python -m src.train --config configs/config.yaml \
-    --run-name "2026-10-02_full_yolov8s_30ep_no_mosaic"
+    --run-name "2026-10-02_yolov8s_30ep_no_mosaic"
 ```
 
 Имя запуска — обязательный осмысленный идентификатор. Папка создастся в `runs/train/<run_name>/`. Если `--run-name` не указан, имя генерируется автоматически по дате (`run_YYYYMMDD_HHMM`).

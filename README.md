@@ -48,11 +48,11 @@ os.environ["KAGGLE_API_TOKEN"] = userdata.get("KAGGLE_API_TOKEN")
 
 # 5. Обучить
 !python -m src.train --config configs/config.yaml \
-    --run-name "2026-10-02_full_yolov8s_30ep"
+    --run-name "2026-10-02_yolov8s_30ep"
 
 # 6. Оценить
 !python -m src.evaluate --config configs/config.yaml \
-    --model runs/train/2026-10-02_full_yolov8s_30ep/weights/best.pt
+    --model runs/train/2026-10-02_yolov8s_30ep/weights/best.pt
 ```
 
 Готовый сценарий — в `notebooks/colab_train.ipynb`.
